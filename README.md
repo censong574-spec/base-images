@@ -6,11 +6,11 @@ Shared **Ubuntu 22.04 LTS** bases plus language runtimes compiled from LTS sourc
 | --- | --- | --- |
 | `local/ai-ubuntu-build:22.04` | Ubuntu 22.04 | tagged from `m.daocloud.io/docker.io/library/ubuntu:22.04` |
 | `local/ai-ubuntu-runtime:22.04` | same | same |
-| `local/ai-jdk-build:21.0.12` | OpenJDK 21 LTS | Temurin **sources** `21.0.12+8` (binary JDK is bootstrap only) |
-| `local/ai-jdk-runtime:21.0.12` | same | stripped product image, keeps `jcmd`/`jstack`/`jmap` |
+| `local/ai-jdk-build:21.0.12` | OpenJDK 21 LTS | official Temurin **binary** `21.0.12+8` |
+| `local/ai-jdk-runtime:21.0.12` | same | same binary, plus common runtime libs |
 | `local/ai-go-toolchain:1.26.5` | Go 1.26.5 | compiled from `go1.26.5.src.tar.gz` |
-| `local/ai-node-build:24.18.0` | Node 24 LTS | compiled from `node-v24.18.0.tar.gz` (Kibana 8.19 pin) |
-| `local/ai-node-runtime:24.18.0` | same | runtime tree |
+| `local/ai-node-build:24.18.0` | Node 24 LTS | official **linux-x64 binary** `24.18.0` (Kibana 8.19 pin) |
+| `local/ai-node-runtime:24.18.0` | same | same binary |
 
 Debug tools match AgentLink: `curl`, `ss`, `vim-tiny`, `procps`, `tcpdump`, `ping`, `dig`, `logrotate`, `tailf`, plus logging extras `jq` / `openssl` / `nc`.
 
@@ -22,7 +22,7 @@ Debug tools match AgentLink: `curl`, `ss`, `vim-tiny`, `procps`, `tcpdump`, `pin
 
 `download-deps.sh` reads and writes `/opt/ai/installers` so the CI box does not re-fetch LTS sources. Logging apt debs use a **separate** name (`ubuntu-22.04-logging-apt-debs.tar.gz`) so they never overwrite AgentLink's `ubuntu-22.04-runtime-apt-debs.tar.gz`.
 
-Reuse from CI today: `go1.25.9.linux-amd64.tar.gz` (Go bootstrap). Do **not** reuse `node-linux-x64.tar.gz` (that is Node 22.16.0; Kibana 8.19 needs Node 24.18.0 source).
+Reuse from CI today: `go1.25.9.linux-amd64.tar.gz` (Go bootstrap) and `node-v24.18.0-linux-x64.tar.gz` (official Node 24). Do **not** reuse `node-linux-x64.tar.gz` (that is Node 22.16.0).
 
 ## Build
 
@@ -35,7 +35,7 @@ bash scripts/package-runtime-apt-debs.sh
 bash scripts/build-bases.sh jdk        # then: go | node | all
 ```
 
-JDK compile is 20–40 minutes. Node is similar. Do not compile JDK while Elasticsearch is using ~3 GiB if the host starts swapping (no swap on EulerOS).
+JDK and Node bases unpack official binaries; they should finish in a few minutes. Do not compile JDK or Node from source on this host.
 
 ## Service images
 

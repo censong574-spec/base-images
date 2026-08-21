@@ -121,9 +121,9 @@ main() {
     "https://mirrors.aliyun.com/golang/go${GO_VERSION}.src.tar.gz" \
     "https://go.dev/dl/go${GO_VERSION}.src.tar.gz"
 
-  download_one "node-v${NODE_VERSION}.tar.gz" \
-    "https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}.tar.gz" \
-    "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}.tar.gz"
+  download_one "node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    "https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz"
 
   download_one "kafka-${KAFKA_VERSION}-src.tgz" \
     "https://mirrors.huaweicloud.com/apache/kafka/${KAFKA_VERSION}/kafka-${KAFKA_VERSION}-src.tgz" \

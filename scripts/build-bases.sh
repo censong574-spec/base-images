@@ -69,26 +69,20 @@ main() {
     if image_exists "$JDK_BUILD_IMAGE" && image_exists "$JDK_RUNTIME_IMAGE"; then
       log "reuse JDK bases: $JDK_BUILD_IMAGE $JDK_RUNTIME_IMAGE"
     else
-      OPS_DEPS_ONLY_FILES="OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz,OpenJDK21U-jdk-sources_${JDK_VERSION}_${JDK_BUILD}.tar.gz" \
+      OPS_DEPS_ONLY_FILES="OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz" \
         bash "$SCRIPT_DIR/download-deps.sh"
       build_image "$JDK_BUILD_IMAGE" "$ROOT/docker/jdk-runtime.Dockerfile" \
         --target jdk-build \
         --build-arg "BUILD_BASE_IMAGE=$UBUNTU_BUILD_IMAGE" \
         --build-arg "RUNTIME_BASE_IMAGE=$UBUNTU_RUNTIME_IMAGE" \
         --build-arg "UBUNTU_APT_MIRROR=$UBUNTU_APT_MIRROR" \
-        --build-arg "JDK_VERSION=$JDK_VERSION" \
-        --build-arg "JDK_BUILD=$JDK_BUILD" \
-        --build-arg "BOOT_JDK_ARCHIVE=deps/OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz" \
-        --build-arg "JDK_SOURCE_ARCHIVE=deps/OpenJDK21U-jdk-sources_${JDK_VERSION}_${JDK_BUILD}.tar.gz"
+        --build-arg "BOOT_JDK_ARCHIVE=deps/OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz"
       build_image "$JDK_RUNTIME_IMAGE" "$ROOT/docker/jdk-runtime.Dockerfile" \
         --target jdk-runtime \
         --build-arg "BUILD_BASE_IMAGE=$UBUNTU_BUILD_IMAGE" \
         --build-arg "RUNTIME_BASE_IMAGE=$UBUNTU_RUNTIME_IMAGE" \
         --build-arg "UBUNTU_APT_MIRROR=$UBUNTU_APT_MIRROR" \
-        --build-arg "JDK_VERSION=$JDK_VERSION" \
-        --build-arg "JDK_BUILD=$JDK_BUILD" \
-        --build-arg "BOOT_JDK_ARCHIVE=deps/OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz" \
-        --build-arg "JDK_SOURCE_ARCHIVE=deps/OpenJDK21U-jdk-sources_${JDK_VERSION}_${JDK_BUILD}.tar.gz"
+        --build-arg "BOOT_JDK_ARCHIVE=deps/OpenJDK21U-jdk_x64_linux_hotspot_${JDK_VERSION}_${JDK_BUILD}.tar.gz"
     fi
   fi
 
@@ -112,7 +106,7 @@ main() {
     if image_exists "$NODE_BUILD_IMAGE" && image_exists "$NODE_RUNTIME_IMAGE"; then
       log "reuse Node bases: $NODE_BUILD_IMAGE $NODE_RUNTIME_IMAGE"
     else
-      OPS_DEPS_ONLY_FILES="node-v${NODE_VERSION}.tar.gz" \
+      OPS_DEPS_ONLY_FILES="node-v${NODE_VERSION}-linux-x64.tar.gz" \
         bash "$SCRIPT_DIR/download-deps.sh"
       build_image "$NODE_BUILD_IMAGE" "$ROOT/docker/node-runtime.Dockerfile" \
         --target node-build \
@@ -120,14 +114,14 @@ main() {
         --build-arg "RUNTIME_BASE_IMAGE=$UBUNTU_RUNTIME_IMAGE" \
         --build-arg "UBUNTU_APT_MIRROR=$UBUNTU_APT_MIRROR" \
         --build-arg "NODE_VERSION=$NODE_VERSION" \
-        --build-arg "NODE_SOURCE_ARCHIVE=deps/node-v${NODE_VERSION}.tar.gz"
+        --build-arg "NODE_BINARY_ARCHIVE=deps/node-v${NODE_VERSION}-linux-x64.tar.gz"
       build_image "$NODE_RUNTIME_IMAGE" "$ROOT/docker/node-runtime.Dockerfile" \
         --target node-runtime \
         --build-arg "BUILD_BASE_IMAGE=$UBUNTU_BUILD_IMAGE" \
         --build-arg "RUNTIME_BASE_IMAGE=$UBUNTU_RUNTIME_IMAGE" \
         --build-arg "UBUNTU_APT_MIRROR=$UBUNTU_APT_MIRROR" \
         --build-arg "NODE_VERSION=$NODE_VERSION" \
-        --build-arg "NODE_SOURCE_ARCHIVE=deps/node-v${NODE_VERSION}.tar.gz"
+        --build-arg "NODE_BINARY_ARCHIVE=deps/node-v${NODE_VERSION}-linux-x64.tar.gz"
     fi
   fi
 
