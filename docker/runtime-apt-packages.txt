@@ -1,0 +1,27 @@
+# Union of Ubuntu 22.04 packages packed into the shared local apt repo.
+# scripts/package-runtime-apt-debs.sh downloads these plus the full
+# recursive Depends/PreDepends closure.
+ca-certificates
+logrotate
+curl
+iproute2
+vim-tiny
+procps
+tcpdump
+iputils-ping
+bind9-dnsutils
+jq
+openssl
+netcat-openbsd
+tzdata
+media-types
+libfreetype6
+libfontconfig1
+libasound2
+libx11-6
+libxext6
+libxi6
+libxrender1
+libxtst6
+zlib1g
+bash

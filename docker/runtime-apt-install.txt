@@ -1,0 +1,15 @@
+# Default runtime subset installed into JDK/Node runtime bases.
+ca-certificates
+logrotate
+curl
+iproute2
+vim-tiny
+procps
+tcpdump
+iputils-ping
+bind9-dnsutils
+jq
+openssl
+netcat-openbsd
+tzdata
+bash
