@@ -39,4 +39,4 @@ JDK and Node bases unpack official binaries; they should finish in a few minutes
 
 ## Service images
 
-Each sibling repo (`kafka-service`, `elasticsearch-service`, `LogStash`, `kibana-service`, `grafana-service`, `FileBeat`) `FROM`s these bases and compiles **that** component from the matching LTS source tag.
+Each sibling repo (`kafka-service`, `es-service`, `LogStash`, `kibana-service`, `grafana-service`, `FileBeat`) uses these bases. **ES/Kibana/Grafana** are built from source tags; **Kafka/Logstash/Filebeat** unpack official binaries. See `versions.env` and `STACK.md` for the v1 pin (`Elastic 8.19.20`).
