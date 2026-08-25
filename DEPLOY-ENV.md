@@ -12,7 +12,7 @@
 | **kibana-service** | **不需要** 额外变量 | 无状态，副本共用 `ES_SERVER`；可选同一个 `KIBANA_PUBLIC_URL` |
 | **filebeat-service** | 按业务 Pod 部署 | 每个业务一份 ConfigMap，不是简单调 `replicas` |
 | **elasticsearch-service** | 多节点时 **`ES_NODE_NAME` 每 Pod 不同** | 不配 `ES_SEED_HOSTS` = 单节点；配了 = 集群；数据目录每 Pod 一块 **EVS PVC** |
-| **kafka-service**（自建） | **需要** 每节点不同变量 | 如 `KAFKA_NODE_ID`；用华为云 Kafka 则不用部署此服务 |
+| **kafka-service**（自建） | 多节点时 **`KAFKA_NODE_ID` 每 Pod 不同** | 单 voter = 单节点；多 voter = KRaft 集群；`KAFKA_CLUSTER_ID` 多节点必填；每 Pod 一块 **EVS PVC** |
 | **grafana-service** | **不需要** 额外变量 | 多副本共用 `ES_SERVER`、`SQL_SERVER`、`SQL_PASSWD`；`GF_PATHS_DATA` 挂 SFS PVC |
 
 **结论：** Logstash / Kibana / Grafana 扩到 2 个副本时，**环境变量与 1 副本完全相同**，只改编排里的 `replicas` 即可。
@@ -207,14 +207,164 @@ StatefulSet 名为 `es` 时 Pod 名为 `es-0`、`es-1`、`es-2`；若名为 `ela
 
 ---
 
-## kafka-service（自建时参考；用华为云可跳过）
+## kafka-service
 
-| 变量 | 单节点默认 | 多节点说明 |
-| --- | --- | --- |
-| `KAFKA_NODE_ID` | `1` | 每 broker **唯一** |
-| `KAFKA_CONTROLLER_QUORUM_VOTERS` | `1@localhost:9093` | 固定 3 个 controller 地址 |
-| `KAFKA_ADVERTISED_LISTENERS` | `PLAINTEXT://localhost:9092` | 每 broker 自己的地址 |
-| `KAFKA_CLUSTER_ID` | 自动生成 | 首次建集群时全集群一致 |
+KRaft 模式（`broker,controller` 合一）。`runtime/start.sh` 根据 `KAFKA_CONTROLLER_QUORUM_VOTERS` 判断单节点 / 多节点。用华为云托管 Kafka 时可跳过本节，只配 `KAFKA_SERVER`。
+
+| 变量 | 单节点 | 多节点 | 默认值 | 示例 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `KAFKA_CONTROLLER_QUORUM_VOTERS` | 1 个 voter | 3 个 voter | `1@localhost:9093` | 见下方示例 | 所有 Pod **相同**；voter 数 >1 即为集群模式 |
+| `KAFKA_CLUSTER_ID` | 可自动生成 | **必填且所有 Pod 相同** | 自动生成 | `MkU3OEVBNTcwNTJENDM2Qk` | `kafka-storage.sh random-uuid` 生成一次写入 Secret |
+| `KAFKA_NODE_ID` | `1` | **每 Pod 不同** | 从 Pod 名推导 | `1` / `2` / `3` | `kafka-0`→`1`，`kafka-1`→`2`；可显式覆盖 |
+| `KAFKA_ADVERTISED_LISTENERS` | 可选 | 可选 | Pod FQDN | `PLAINTEXT://kafka-0.kafka-headless:9092` | 未设置时自动 `PLAINTEXT://<hostname-fqdn>:9092` |
+| `KAFKA_LOG_DIRS` | 必填 | 必填 | `/var/lib/kafka/data` | 同上 | 日志目录；**每 Pod 独立 EVS PVC** |
+| `KAFKA_LOG_RETENTION_HOURS` | 可选 | 可选 | `24` | `168` | 消息保留时间 |
+| `KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR` | 自动 `1` | 自动 = voter 数 | — | `3` | 多节点默认 3，可覆盖 |
+
+**客户端**（Logstash、Filebeat）用 **`KAFKA_SERVER`**（bootstrap，逗号分隔，无空格），不是 `KAFKA_ADVERTISED_LISTENERS`。
+
+### 存储（EVS PVC）
+
+- CCE **有状态负载** + `volumeClaimTemplates`，`storageClassName: csi-disk`。
+- 每个 Pod 一块盘，挂到 `/var/lib/kafka/data`。
+- **不要**用 SFS 共享卷。
+
+### 生成 KAFKA_CLUSTER_ID（多节点首次部署）
+
+```bash
+/opt/kafka/bin/kafka-storage.sh random-uuid
+```
+
+写入 Secret，所有 Pod 引用同一值。
+
+### CCE 服务（单节点与多节点相同）
+
+1. **Headless** `kafka-headless` — `9092`（broker）、`9093`（controller）
+2. **ClusterIP** `kafka:9092` — 单节点时可选作 bootstrap
+
+### 单节点示例（有状态负载 replicas: 1）
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+spec:
+  clusterIP: None
+  selector:
+    app: kafka
+  ports:
+    - port: 9092
+      name: broker
+    - port: 9093
+      name: controller
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+spec:
+  selector:
+    app: kafka
+  ports:
+    - port: 9092
+      name: broker
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+spec:
+  serviceName: kafka-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: your-registry/kafka-service:3.9.2
+          env:
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@localhost:9093"
+            - name: KAFKA_NODE_ID
+              value: "1"
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: csi-disk
+        resources:
+          requests:
+            storage: 50Gi
+```
+
+Logstash `KAFKA_SERVER`: `kafka:9092`
+
+### 多节点示例（有状态负载 replicas: 3）
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kafka-cluster-id
+type: Opaque
+stringData:
+  cluster-id: "MkU3OEVBNTcwNTJENDM2Qk"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+spec:
+  serviceName: kafka-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: your-registry/kafka-service:3.9.2
+          env:
+            - name: KAFKA_CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-cluster-id
+                  key: cluster-id
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka-0.kafka-headless:9093,2@kafka-1.kafka-headless:9093,3@kafka-2.kafka-headless:9093"
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: csi-disk
+        resources:
+          requests:
+            storage: 100Gi
+```
+
+Logstash `KAFKA_SERVER`:
+
+```text
+kafka-0.kafka-headless:9092,kafka-1.kafka-headless:9092,kafka-2.kafka-headless:9092
+```
 
 ---
 
@@ -285,19 +435,21 @@ env:
 | `GRAFANA_PUBLIC_URL` | 仅 Grafana 网关对外 URL |
 | `SQL_SERVER` / `SQL_PASSWD` | Grafana 连 PostgreSQL（多副本） |
 | `ES_CLUSTER_NAME` / `ES_SEED_HOSTS` / `ES_NODE_NAME` | Elasticsearch 集群（多节点） |
+| `KAFKA_CONTROLLER_QUORUM_VOTERS` / `KAFKA_CLUSTER_ID` | Kafka KRaft 集群（多节点） |
 
 ---
 
 ## 最小联调清单
 
 ```text
-Filebeat  →  Kafka（与 KAFKA_SERVER 同集群）
+Filebeat  →  Kafka（KAFKA_SERVER bootstrap）
               ↓
 Logstash  →  KAFKA_SERVER + ES_SERVER，replicas≥1
               ↓
 ES        ←  ES_PATH_DATA 挂 EVS PVC；多节点配 ES_SEED_HOSTS；客户端用 ES_SERVER
 Kibana    →  ES_SERVER（+ 可选 KIBANA_PUBLIC_URL）
 Grafana   →  ES_SERVER + SQL_SERVER/SQL_PASSWD（多副本）；PVC 挂 /var/lib/grafana（SFS）
+Kafka     →  KAFKA_LOG_DIRS 挂 EVS PVC；多节点配 KAFKA_CLUSTER_ID + quorum voters
 ```
 
 ---
@@ -305,4 +457,4 @@ Grafana   →  ES_SERVER + SQL_SERVER/SQL_PASSWD（多副本）；PVC 挂 /var/l
 ## 相关文档
 
 - `STACK.md` — 版本矩阵
-- `kibana-service` / `LogStash` / `grafana-service` / `es-service` 各仓库 `README.md`
+- `kibana-service` / `LogStash` / `grafana-service` / `es-service` / `kafka-service` 各仓库 `README.md`
