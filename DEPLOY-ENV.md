@@ -13,9 +13,9 @@
 | **filebeat-service** | 按业务 Pod 部署 | 每个业务一份 ConfigMap，不是简单调 `replicas` |
 | **elasticsearch-service** | **需要** 集群级配置 | 另见下文 ES 小节 |
 | **kafka-service**（自建） | **需要** 每节点不同变量 | 如 `KAFKA_NODE_ID`；用华为云 Kafka 则不用部署此服务 |
-| **grafana-service** | 默认 1 副本 | 多副本需外置 DB，另规划 |
+| **grafana-service** | **不需要** 额外变量 | 多副本共用 `ES_SERVER`、`SQL_SERVER`、`SQL_PASSWD`；`GF_PATHS_DATA` 挂 SFS PVC |
 
-**结论：** Logstash / Kibana 扩到 2 个副本时，**环境变量与 1 副本完全相同**，只改编排里的 `replicas` 即可。
+**结论：** Logstash / Kibana / Grafana 扩到 2 个副本时，**环境变量与 1 副本完全相同**，只改编排里的 `replicas` 即可。
 
 ---
 
@@ -116,11 +116,60 @@ env:
 
 ---
 
-## grafana-service（参考）
+## grafana-service
 
-当前未做运行时 env 改造。查询 ES **8.19** 时数据源 provisioning 已含 `esVersion: "8.0.0"`。默认连接：
+启动时由 `runtime/start.sh` 渲染 ES 数据源模板；配置 PostgreSQL 后多副本共享用户、仪表盘等元数据。
 
-- URL：`http://elasticsearch:9200`（在 `provisioning/datasources/elasticsearch.yaml`，部署时可 ConfigMap 覆盖）
+| 变量 | 必填 | 默认值 | 示例 | 说明 |
+| --- | --- | --- | --- | --- |
+| `ES_SERVER` | 生产建议必填 | `http://elasticsearch:9200` | `http://elasticsearch:9200` | 写入 provisioning 的 Elasticsearch 数据源 URL |
+| `SQL_SERVER` | 多副本必填 | （不设置则用 SQLite） | `postgres:5432` | PostgreSQL 地址，格式 `host:port`；库名与用户固定为 **grafana** / **grafana** |
+| `SQL_PASSWD` | 配了 `SQL_SERVER` 时必填 | — | `your-secret` | `grafana` 用户的密码 |
+| `SQL_SSL_MODE` | 否 | `disable` | `require` | 对应 `GF_DATABASE_SSL_MODE` |
+| `GRAFANA_PUBLIC_URL` | 否 | （不设置） | `http://1.1.1.1/v1/agent/grafana` | 经网关对外访问时的完整 URL（`GF_SERVER_ROOT_URL` / 子路径） |
+
+### PostgreSQL 预置（用户与库均为 grafana）
+
+多副本前在 PostgreSQL 执行（密码与 Secret 中 `SQL_PASSWD` 一致）：
+
+```sql
+CREATE USER grafana WITH PASSWORD 'your-secret';
+CREATE DATABASE grafana OWNER grafana;
+```
+
+`start.sh` 固定 `GF_DATABASE_USER=grafana`、`GF_DATABASE_NAME=grafana`，**不可通过环境变量覆盖**。
+
+### 存储（SFS PVC）
+
+- 将 **华为云 SFS** 的 PVC 挂到容器 **`/var/lib/grafana`**（`GF_PATHS_DATA`）。
+- 多副本时：**元数据在 PostgreSQL**，PVC 主要用于插件、缓存等本地路径；各 Pod 可共享同一 SFS 卷。
+- 单副本且未配 `SQL_SERVER` 时仍可用 SQLite（数据在 PVC 内），生产多副本请务必使用 PostgreSQL。
+
+### 多副本示例（2 个 Grafana）
+
+```yaml
+replicas: 2
+volumeMounts:
+  - name: grafana-data
+    mountPath: /var/lib/grafana
+volumes:
+  - name: grafana-data
+    persistentVolumeClaim:
+      claimName: grafana-sfs-pvc   # SFS StorageClass
+env:
+  - name: ES_SERVER
+    value: "http://elasticsearch:9200"
+  - name: SQL_SERVER
+    value: "postgres.default.svc:5432"
+  - name: SQL_PASSWD
+    valueFrom:
+      secretKeyRef:
+        name: grafana-db
+        key: password
+  # 若经 service-router 暴露：
+  # - name: GRAFANA_PUBLIC_URL
+  #   value: "http://1.1.1.1/v1/agent/grafana"
+```
 
 ---
 
@@ -128,9 +177,11 @@ env:
 
 | 变量 | 用途 |
 | --- | --- |
-| `ES_SERVER` | **所有**连 Elasticsearch 的服务统一使用（Kibana、Logstash） |
+| `ES_SERVER` | **所有**连 Elasticsearch 的服务统一使用（Kibana、Logstash、Grafana） |
 | `KAFKA_SERVER` | Logstash（及 Filebeat）连 Kafka bootstrap |
-| `KIBANA_PUBLIC_URL` | 仅 Kibana 网关对外 URL，一个变量代替 basePath/publicBaseUrl |
+| `KIBANA_PUBLIC_URL` | 仅 Kibana 网关对外 URL |
+| `GRAFANA_PUBLIC_URL` | 仅 Grafana 网关对外 URL |
+| `SQL_SERVER` / `SQL_PASSWD` | Grafana 连 PostgreSQL（多副本） |
 
 ---
 
@@ -143,7 +194,7 @@ Logstash  →  KAFKA_SERVER + ES_SERVER，replicas≥1
               ↓
 ES        ←  ES_SERVER
 Kibana    →  ES_SERVER（+ 可选 KIBANA_PUBLIC_URL）
-Grafana   →  ES（provisioning 或 ConfigMap）
+Grafana   →  ES_SERVER + SQL_SERVER/SQL_PASSWD（多副本）；PVC 挂 /var/lib/grafana（SFS）
 ```
 
 ---
@@ -151,4 +202,4 @@ Grafana   →  ES（provisioning 或 ConfigMap）
 ## 相关文档
 
 - `STACK.md` — 版本矩阵
-- `kibana-service` / `LogStash` 各仓库 `README.md`
+- `kibana-service` / `LogStash` / `grafana-service` 各仓库 `README.md`
