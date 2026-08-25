@@ -26,6 +26,8 @@ Canonical pins: **`base-images/versions.env`**. Overview: **`../README.md`**.
 
 All of **Elasticsearch**, **Logstash**, **Kibana**, and **Filebeat** must stay on the **same** `ELASTIC_VERSION` (currently `8.19.20`). Kafka and Grafana are independent but tested with this pin.
 
+**Runtime env vars:** see `DEPLOY-ENV.md` in this repo (and `../DEPLOY-ENV.md` in the ops workspace).
+
 ## Not in scope for v1
 
 - Elastic **8.15.x** (legacy lab only; do not deploy for v1)
