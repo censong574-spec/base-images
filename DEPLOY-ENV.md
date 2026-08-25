@@ -11,7 +11,7 @@
 | **logstash-service** | **不需要** 额外变量 | 副本共用同一套 `KAFKA_SERVER`、`ES_SERVER`；`group_id` 固定 `ai-logstash`（写在镜像模板里，不要按 Pod 改） |
 | **kibana-service** | **不需要** 额外变量 | 无状态，副本共用 `ES_SERVER`；可选同一个 `KIBANA_PUBLIC_URL` |
 | **filebeat-service** | 按业务 Pod 部署 | 每个业务一份 ConfigMap，不是简单调 `replicas` |
-| **elasticsearch-service** | **需要** 集群级配置 | 另见下文 ES 小节 |
+| **elasticsearch-service** | 多节点时 **`ES_NODE_NAME` 每 Pod 不同** | 不配 `ES_SEED_HOSTS` = 单节点；配了 = 集群；数据目录每 Pod 一块 **EVS PVC** |
 | **kafka-service**（自建） | **需要** 每节点不同变量 | 如 `KAFKA_NODE_ID`；用华为云 Kafka 则不用部署此服务 |
 | **grafana-service** | **不需要** 额外变量 | 多副本共用 `ES_SERVER`、`SQL_SERVER`、`SQL_PASSWD`；`GF_PATHS_DATA` 挂 SFS PVC |
 
@@ -92,16 +92,118 @@ env:
 
 ---
 
-## elasticsearch-service（自建时参考）
+## elasticsearch-service
 
-当前镜像默认 **单节点** PoC（`discovery.type=single-node`）。上生产多节点需单独改造，运行时常见变量：
+`runtime/start.sh` 在启动时生成 `elasticsearch.yml`。不配 `ES_SEED_HOSTS` 为**单节点**；配置后为**多节点**（适合 CCE 有状态负载 StatefulSet）。
 
-| 变量 | 说明 |
-| --- | --- |
-| `ES_JAVA_OPTS` | 堆内存，如 `-Xms2g -Xmx2g` |
-| `ES_PATH_DATA` | 数据目录，需挂 PVC |
+| 变量 | 单节点 | 多节点 | 默认值 | 示例 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `ES_CLUSTER_NAME` | 必填 | 必填 | `ai-log-cluster` | `ai-log-cluster` | 集群名，所有节点相同 |
+| `ES_NODE_NAME` | 可选 | **每 Pod 不同** | `hostname` | `es-0` | 节点名；多节点建议用 `metadata.name` 注入 |
+| `ES_SEED_HOSTS` | **不设置** | 必填 | — | `es-0.es-headless:9300,es-1.es-headless:9300,es-2.es-headless:9300` | 发现地址，英文逗号分隔，**无空格** |
+| `ES_INITIAL_MASTER_NODES` | 不设置 | 首次建集群必填 | — | `es-0,es-1,es-2` | 与 `ES_NODE_NAME` 一致；集群已形成后可去掉 |
+| `ES_PATH_DATA` | 必填 | 必填 | `/usr/share/elasticsearch/data` | 同上 | 数据目录；**每 Pod 独立 EVS PVC**，不要用 SFS |
+| `ES_JAVA_OPTS` | 建议 | 建议 | `-Xms2g -Xmx2g` | `-Xms4g -Xmx4g` | JVM 堆；持续 ~1k 条/s 日志建议 4g+ |
 
-集群发现（`seed_hosts`、`initial_master_nodes` 等）尚未 env 化，多节点部署前需改镜像或挂 `elasticsearch.yml`。
+**客户端**仍用 `ES_SERVER`（如 `http://elasticsearch:9200`）连 ClusterIP Service，不要直连单个 Pod。
+
+### 存储（EVS PVC）
+
+- CCE **有状态负载** + `volumeClaimTemplates`，`storageClassName: csi-disk`（云硬盘）。
+- 每个 Pod 一块盘，挂到 `/usr/share/elasticsearch/data`。
+- **不要**用 SFS 共享卷（Grafana 才用 SFS）。
+
+### CCE 服务（单节点与多节点相同）
+
+需要两个 Service：
+
+1. **Headless**（`clusterIP: None`）— 节点间 9300 发现，DNS：`es-0.es-headless`、`es-1.es-headless`…
+2. **ClusterIP** `elasticsearch:9200` — Kibana / Logstash / Grafana 的 `ES_SERVER`
+
+### 单节点示例（有状态负载 replicas: 1）
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-headless
+spec:
+  clusterIP: None
+  selector:
+    app: elasticsearch
+  ports:
+    - port: 9300
+      name: transport
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - port: 9200
+      name: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: es
+spec:
+  serviceName: es-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+        - name: elasticsearch
+          image: your-registry/elasticsearch-service:8.19.20
+          env:
+            - name: ES_CLUSTER_NAME
+              value: ai-log-cluster
+            - name: ES_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ES_JAVA_OPTS
+              value: "-Xms4g -Xmx4g"
+          volumeMounts:
+            - name: es-data
+              mountPath: /usr/share/elasticsearch/data
+  volumeClaimTemplates:
+    - metadata:
+        name: es-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: csi-disk
+        resources:
+          requests:
+            storage: 200Gi
+```
+
+不配 `ES_SEED_HOSTS` → `discovery.type: single-node`。索引副本数请设 `number_of_replicas: 0`。
+
+### 多节点示例（有状态负载 replicas: 3）
+
+在单节点基础上 `replicas: 3`，并增加：
+
+```yaml
+env:
+  - name: ES_SEED_HOSTS
+    value: "es-0.es-headless:9300,es-1.es-headless:9300,es-2.es-headless:9300"
+  - name: ES_INITIAL_MASTER_NODES
+    value: "es-0,es-1,es-2"
+```
+
+StatefulSet 名为 `es` 时 Pod 名为 `es-0`、`es-1`、`es-2`；若名为 `elasticsearch`，则改为 `elasticsearch-0.es-headless:9300` 等。
+
+3 节点时索引 `number_of_replicas: 1` 可达 green。
 
 ---
 
@@ -182,6 +284,7 @@ env:
 | `KIBANA_PUBLIC_URL` | 仅 Kibana 网关对外 URL |
 | `GRAFANA_PUBLIC_URL` | 仅 Grafana 网关对外 URL |
 | `SQL_SERVER` / `SQL_PASSWD` | Grafana 连 PostgreSQL（多副本） |
+| `ES_CLUSTER_NAME` / `ES_SEED_HOSTS` / `ES_NODE_NAME` | Elasticsearch 集群（多节点） |
 
 ---
 
@@ -192,7 +295,7 @@ Filebeat  →  Kafka（与 KAFKA_SERVER 同集群）
               ↓
 Logstash  →  KAFKA_SERVER + ES_SERVER，replicas≥1
               ↓
-ES        ←  ES_SERVER
+ES        ←  ES_PATH_DATA 挂 EVS PVC；多节点配 ES_SEED_HOSTS；客户端用 ES_SERVER
 Kibana    →  ES_SERVER（+ 可选 KIBANA_PUBLIC_URL）
 Grafana   →  ES_SERVER + SQL_SERVER/SQL_PASSWD（多副本）；PVC 挂 /var/lib/grafana（SFS）
 ```
@@ -202,4 +305,4 @@ Grafana   →  ES_SERVER + SQL_SERVER/SQL_PASSWD（多副本）；PVC 挂 /var/l
 ## 相关文档
 
 - `STACK.md` — 版本矩阵
-- `kibana-service` / `LogStash` / `grafana-service` 各仓库 `README.md`
+- `kibana-service` / `LogStash` / `grafana-service` / `es-service` 各仓库 `README.md`
